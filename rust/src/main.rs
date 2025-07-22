@@ -146,7 +146,7 @@ fn main() -> bitcoincore_rpc::Result<()> {
 
     let (input_address, input_amount) = tx_raw["vin"]
         .as_array()
-        .and_then(|vins| vins.get(0))
+        .and_then(|vins| vins.first())
         .and_then(|vin| {
             let prev_txid = vin["txid"].as_str()?;
             println!("Fetching previous transaction: {}", prev_txid);
