@@ -16,6 +16,12 @@ const RPC_PASS: &str = "password";
 // You can use calls not provided in RPC lib API using the generic `call` function.
 // An example of using the `send` RPC call, which doesn't have exposed API.
 // You can also use serde_json `Deserialize` derivation to capture the returned json result.
+#[derive(Deserialize)]
+struct SendResult {
+    complete: bool,
+    txid: String,
+}
+
 fn send(rpc: &Client, addr: &str) -> bitcoincore_rpc::Result<String> {
     let args = [
         json!([{addr : 100 }]), // recipient address
@@ -25,16 +31,12 @@ fn send(rpc: &Client, addr: &str) -> bitcoincore_rpc::Result<String> {
         json!(null),            // Empty option object
     ];
 
-    #[derive(Deserialize)]
-    struct SendResult {
-        complete: bool,
-        txid: String,
-    }
     let send_result = rpc.call::<SendResult>("send", &args)?;
     assert!(send_result.complete);
     Ok(send_result.txid)
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> bitcoincore_rpc::Result<()> {
     // Connect to Bitcoin Core RPC
     let rpc = Client::new(
@@ -44,7 +46,7 @@ fn main() -> bitcoincore_rpc::Result<()> {
 
     // Get blockchain info
     let blockchain_info = rpc.get_blockchain_info()?;
-    println!("Blockchain Info: {:?}", blockchain_info);
+    println!("Blockchain Info: {blockchain_info:?}");
 
     // Create/Load the wallets, named 'Miner' and 'Trader'. Have logic to optionally create/load them if they do not exist or not loaded already.
 
@@ -53,40 +55,40 @@ fn main() -> bitcoincore_rpc::Result<()> {
     let target_wallets = ["Miner", "Trader"];
     for wallet_name in target_wallets {
         if !existing_wallets.contains(&wallet_name.to_string()) {
-            println!("Creating {} wallet", wallet_name);
+            println!("Creating {wallet_name} wallet");
             rpc.create_wallet(wallet_name, None, None, None, None)?;
         } else if !loaded_wallets.contains(&wallet_name.to_string()) {
-            println!("Loading {} wallet", wallet_name);
+            println!("Loading {wallet_name} wallet");
             rpc.load_wallet(wallet_name)?;
         } else {
-            println!("{} Wallet already loaded", wallet_name);
+            println!("{wallet_name} Wallet already loaded");
         }
     }
 
     // Generate spendable balances in the Miner wallet. How many blocks needs to be mined?
 
     let miner_rpc = Client::new(
-        &format!("{}/wallet/Miner", RPC_URL),
+        &format!("{RPC_URL}/wallet/Miner"),
         Auth::UserPass(RPC_USER.to_owned(), RPC_PASS.to_owned()),
     )?;
     let uncheckd_miner_address = miner_rpc.get_new_address(None, None)?;
     let miner_address = uncheckd_miner_address
         .require_network(Network::Regtest)
         .unwrap();
-    println!("Generating 101 blocks to Miner address {}", miner_address);
+    println!("Generating 101 blocks to Miner address {miner_address}");
     miner_rpc.generate_to_address(101, &miner_address)?;
 
     // Load Trader wallet and generate a new address
 
     let trader_rpc = Client::new(
-        &format!("{}/wallet/Trader", RPC_URL),
+        &format!("{RPC_URL}/wallet/Trader"),
         Auth::UserPass(RPC_USER.to_owned(), RPC_PASS.to_owned()),
     )?;
     let uncheckedtrader_address = trader_rpc.get_new_address(None, None)?;
     let trader_address = uncheckedtrader_address
         .require_network(Network::Regtest)
         .unwrap();
-    println!("Sending 20 BTC to Trader address: {}", trader_address);
+    println!("Sending 20 BTC to Trader address: {trader_address}");
 
     // Send 20 BTC from Miner to Trader
 
@@ -100,18 +102,18 @@ fn main() -> bitcoincore_rpc::Result<()> {
         None,
         None,
     )?;
-    println!("Generated transaction txid {}", send_tx);
+    println!("Generated transaction txid {send_tx}");
 
     // Check transaction in mempool
 
     let mempool_entry = miner_rpc.get_mempool_entry(&send_tx)?;
-    println!("Mempool entry for txid {:?}", mempool_entry);
+    println!("Mempool entry for txid {mempool_entry:?}");
 
     // Mine 1 block to confirm the transaction
 
     miner_rpc.generate_to_address(1, &miner_address)?;
     let trader_balance = trader_rpc.get_balance(None, None)?;
-    println!("Trader balance: {}", trader_balance);
+    println!("Trader balance: {trader_balance}");
 
     // Extract all required transaction details
 
@@ -119,10 +121,7 @@ fn main() -> bitcoincore_rpc::Result<()> {
     let fee = tx_details.fee.unwrap_or(SignedAmount::from_sat(0)).abs();
     let block_height = tx_details.info.blockheight.unwrap_or(0);
     let block_hash = tx_details.info.blockhash.unwrap();
-    println!(
-        "Transaction fee: {}, block height: {} , block hash: {}",
-        fee, block_height, block_hash
-    );
+    println!("Transaction fee: {fee}, block height: {block_height} , block hash: {block_hash}");
 
     // Get raw transaction details
 
@@ -149,14 +148,14 @@ fn main() -> bitcoincore_rpc::Result<()> {
         .and_then(|vins| vins.first())
         .and_then(|vin| {
             let prev_txid = vin["txid"].as_str()?;
-            println!("Fetching previous transaction: {}", prev_txid);
+            println!("Fetching previous transaction: {prev_txid}");
             miner_rpc
                 .call("getrawtransaction", &[prev_txid.into(), true.into()])
                 .ok()
                 .and_then(|prev_tx: serde_json::Value| {
                     prev_tx["vout"]
                         .as_array()?
-                        .get(vin["vout"].as_u64()? as usize)
+                        .get(usize::try_from(vin["vout"].as_u64()?).ok()?)
                         .cloned()
                         .and_then(parse_addr_amount)
                 })
@@ -184,36 +183,34 @@ fn main() -> bitcoincore_rpc::Result<()> {
                 }
             },
         );
-    println!(
-        "Trader output amount: {}, Change address: {}, Change amount: {}",
-        trader_output_amount.to_btc(),
-        change_address
-            .as_ref()
-            .map_or(String::new(), |a| a.to_string()),
-        change_amount.to_btc()
-    );
+    // println!(
+    //     "Trader output amount: {}, Change address: {}, Change amount: {}",
+    //     trader_output_amount.to_btc(),
+    //     change_address
+    //         .as_ref()
+    //         .map_or(String::new(), |a| a.to_string()),
+    //     change_amount.to_btc()
+    // );
 
     // Write the data to ../out.txt in the specified format given in readme.md
 
     let mut file = File::create("../out.txt")?;
-    writeln!(file, "{}", send_tx)?;
-    writeln!(
-        file,
-        "{}",
-        input_address.map_or(String::new(), |a| a.to_string())
-    )?;
-    writeln!(file, "{}", input_amount.to_btc())?;
-    writeln!(file, "{}", trader_address)?;
-    writeln!(file, "{}", trader_output_amount.to_btc())?;
-    writeln!(
-        file,
-        "{}",
-        change_address.map_or(String::new(), |c| c.to_string())
-    )?;
-    writeln!(file, "{}", change_amount.to_btc())?;
-    writeln!(file, "{}", fee.to_btc())?;
-    writeln!(file, "{}", block_height)?;
-    writeln!(file, "{}", block_hash)?;
+    writeln!(file, "{send_tx}")?;
+    let input_address_str = input_address.map_or(String::new(), |a| a.to_string());
+    writeln!(file, "{input_address_str}")?;
+    let input_amount_btc = input_amount.to_btc();
+    writeln!(file, "{input_amount_btc}")?;
+    writeln!(file, "{trader_address}")?;
+    let trader_output_amount_btc = trader_output_amount.to_btc();
+    writeln!(file, "{trader_output_amount_btc}")?;
+    let change_address_str = change_address.map_or(String::new(), |c| c.to_string());
+    writeln!(file, "{change_address_str}")?;
+    let change_amount_btc = change_amount.to_btc();
+    writeln!(file, "{change_amount_btc}")?;
+    let fee_btc = fee.to_btc();
+    writeln!(file, "{fee_btc}")?;
+    writeln!(file, "{block_height}")?;
+    writeln!(file, "{block_hash}")?;
 
     println!("Transaction Details written to out.txt");
 
